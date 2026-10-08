@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS WebFront.pollutant_types (
     max_plausible DOUBLE
 );
 
--- per-device stream declaration (device_id, legacy_value_id) -> pollutant type
+-- per-device stream declaration (device_id, legacy_value_id) -> measure type
 CREATE TABLE IF NOT EXISTS WebFront.pollutants (
     id                INT AUTO_INCREMENT PRIMARY KEY,
     device_id         INT NOT NULL,

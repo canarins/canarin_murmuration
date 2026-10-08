@@ -27,17 +27,17 @@ Pico / Femto ──UDP──▶ Birdhouse ──▶ Data.data_points_canonical (
                                         Plumage dashboard · Chirping alerts
 ```
 
-Vocabulary is the platform's own: a channel is `WebFront.pollutants` (per device:
-`pollutant_type_id`, `instance_index`, `scale_factor`) and a pollutant is
+Vocabulary: a **measure** is one quantity a device reports; a **channel** is one declared stream of a measure on one device, `WebFront.pollutants` (per device:
+`pollutant_type_id`, `instance_index`, `scale_factor`) and a measure type is
 `WebFront.pollutant_types.id` (1 PM1, 2 PM2.5, 3 PM10, 13 TVOC, 17 humidity,
 18 pressure, 16 temperature = device self-heat, 863 battery). What the model does
-with each type is a row in `Murmuration.type_registry` (block, role, decoder head,
+with each type is a row in `Murmuration.measure_registry` (block, role, decoder head,
 sanity window, nested-fraction parent). Device position comes from
 `Devices.devices_hardware.last_lat/last_long/gps_hdop`; what the platform does not
 hold yet — device type (Pico/Femto), power source, revision — is declared in
 `Murmuration.device_profile` (optional; unknown devices default to `other`).
 
-**Privacy rule, enforced by schema.** A public prediction names a pollutant at a
+**Privacy rule, enforced by schema.** A public prediction names a measure at a
 place and a time, never its source. `Murmuration.field_forecast` and
 `Murmuration.virtual_sensor` carry no `device_id` (there is a test). The four
 device-level relations live in `MurmurationInternal` — grant that schema to admins only.

@@ -86,7 +86,7 @@ fault-injection study the trust controller down-weights
 faulty devices and cuts field-reconstruction error by $13\%$ toward an oracle that
 is told which devices have failed; mislocation, catchable only in dense
 neighbourhoods, is left to dedicated position state. Because each device reports several
-pollutants, we also show that the channel most useful for predicting
+measures, we also show that the channel most useful for predicting
 particulate mass---humidity, via hygroscopic growth---is almost uncorrelated with
 it, so grouping channels by correlation is misleading, and that such covariates
 must condition each device's own reading rather than join a shared latent. We release the
@@ -182,9 +182,9 @@ of the same kind. A Pico carries a Plantower PMSA003 particulate counter
 signals), and Bosch BME280 and BME680 environmental sensors---so a single unit
 reports a dozen or so distinct \texttt{normalized\_code}s, of at least four
 different semantic types (Table~\ref{tab:channels}). Throughout the paper
-\texttt{normalized\_code} is the canonical pollutant identity; in the deployed
-platform it is \texttt{WebFront.pollutant\_types.id}, reached through each
-device's channel declaration in \texttt{WebFront.pollutants}
+\texttt{normalized\_code} is the canonical identity of a \emph{measure}---one quantity a device
+reports---and in the deployed platform it is \texttt{WebFront.pollutant\_types.id},
+reached through each device's channel declaration in \texttt{WebFront.pollutants}
 (\S\ref{sec:birdhouse}). Treating them as
 interchangeable ``pollutants'' would be a modelling error: only some are ambient
 field quantities at all.
@@ -220,8 +220,8 @@ fixed, known width: \textsc{geo} (latitude, longitude, and a quality covariate),
 \textsc{hardware} (battery state and board temperature), and \textsc{weather}
 (delivered by the weather service, which shares the normalized-code vocabulary but
 is keyed by grid cell and hour rather than by device---see below). Only
-the fourth, \textsc{sensing}---pollutants and whatever else a contributor
-reports---is an open set that grows over the life of the deployment.
+the fourth, \textsc{sensing}---the measures themselves, pollutants and whatever
+else a contributor reports---is an open set that grows over the life of the deployment.
 
 Two consequences follow, and they simplify rather than complicate the design.
 First, \emph{only \textsc{sensing} needs dynamic handling}; the other three use
@@ -243,7 +243,7 @@ the identical leakage the paper forbids for device type.
 \paragraph{The types table carries the block.}
 Block membership is a property of a \emph{code}, not something the model should
 infer from the code's spelling. Murmuration therefore keeps a type registry
-(\texttt{Murmuration.type\_registry}, keyed by pollutant type) with the block and the finer role
+(\texttt{Murmuration.measure\_registry}, keyed by measure type) with the block and the finer role
 (\texttt{block} $\in$ \{geo, hardware, weather, sensing\}; \texttt{role} $\in$
 \{target, covariate, diagnostic, derived, housekeeping, exogenous\}), together with
 the flags the model needs: whether a code gets a decoder head, whether it may join
@@ -294,7 +294,7 @@ Block & Contents & Arity & Role \\
 \textsc{geo} & lat, lon (+ fix quality) & fixed & spatial weighting, position state \\
 \textsc{hardware} & battery, board temperature & fixed & health/trust; \emph{never} the field \\
 \textsc{weather} & from weather service, keyed (cell, hour) & fixed & control input $u_t$ \\
-\textsc{sensing} & pollutants and others & \textbf{variable} & fast state $\rightarrow$ \textbf{tranches} \\
+\textsc{sensing} & measures: pollutants and others & \textbf{variable} & fast state $\rightarrow$ \textbf{tranches} \\
 \bottomrule
 \end{tabular}
 \caption{The four blocks of a record, joined by
@@ -664,12 +664,12 @@ Two invariants are established \emph{at ingestion}, before any storage, and the
 rest of the platform---the model included---relies on them:
 \begin{itemize}\itemsep1pt \topsep2pt
 \item \textbf{Unit normalization.} Each raw channel value is scaled by a
-per-pollutant \texttt{scale\_factor} into canonical units, so magnitudes are
+per-measure \texttt{scale\_factor} into canonical units, so magnitudes are
 comparable across device revisions and sensor vendors.
 \item \textbf{Identity normalization.} Each value is resolved to a
 \emph{channel declaration}: a row of \texttt{WebFront.pollutants} keyed by
 (\texttt{device\_id}, \texttt{pollutant\_type\_id}, \texttt{granularity},
-\texttt{instance\_index}) that names the canonical pollutant type
+\texttt{instance\_index}) that names the canonical measure type
 (\texttt{WebFront.pollutant\_types}: PM1, PM2.5, PM10, TVOC, CO2, humidity,
 pressure, temperature, battery, \ldots), carries the \texttt{scale\_factor}, and
 maps the legacy per-device \texttt{value\_id} the firmware still emits. Channels
@@ -862,7 +862,7 @@ ingestion, storage, and the model.
 Offline \emph{training} pulls a historical corpus from the authoritative store
 as tuples of the form Eq.~\eqref{eq:tuple}---in deployment a join of
 \texttt{Data.data\_points\_canonical} to \texttt{WebFront.pollutants} that
-selects the pollutant type and instance---grouping them into a \emph{time}
+selects the measure type and instance---grouping them into a \emph{time}
 $\times$ \emph{device} $\times$ \emph{code} structure whose code axis is
 discovered from the data rather than fixed in advance. Device position comes from
 \texttt{Devices.devices\_hardware} (last fix, HDOP, satellite count); the
@@ -893,7 +893,7 @@ database---%
 \texttt{device\_trust}, \texttt{device\_exposure} and
 \texttt{device\_position}---keyed by the same composite identity plus a \texttt{model\_version}.
 The six are split across two schemas by a privacy rule that the schema itself
-enforces: a public prediction names a pollutant at a place and a time, never its
+enforces: a public prediction names a measure at a place and a time, never its
 source. \texttt{Murmuration.field\_forecast} and
 \texttt{Murmuration.virtual\_sensor} carry no device identifier and no
 contributor list; the four device-level relations live in
@@ -989,7 +989,7 @@ Outputs & MySQL (\texttt{Murmuration}, \texttt{MurmurationInternal}) & W & 6 rel
 \end{tabular}
 \caption{Murmuration's interfaces to the Canarin stores (R\,=\,read,
 W\,=\,write). The model consumes and emits the same normalized vocabulary
-(\texttt{scale\_factor} / pollutant type / \texttt{instance\_index})
+(\texttt{scale\_factor} / measure type / \texttt{instance\_index})
 established at ingestion, so no schema translation occurs across the pipeline.
 $^\dagger$Designed, not yet deployed (\S\ref{sec:thermal}).}
 \label{tab:io}

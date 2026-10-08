@@ -151,8 +151,8 @@ def test_artifacts_are_immutable_and_rollback(tmp_path):
 # ------------------------------------------------------------------ queue --
 def test_record_parses_birdhouse_stream_entry():
     from murmuration.queue import Record
-    r = Record.from_fields({"device_id": "72", "pollutant_id": "415", "pollutant_type": "2",
+    r = Record.from_fields({"device_id": "72", "channel_id": "415", "measure_type": "2",
                             "instance_index": "1", "ts": "1700000000", "value": "12.5",
                             "received_at": "1700021600.25"})
-    assert r.device_id == 72 and r.ptype == 2 and r.value == 12.5
+    assert r.device_id == 72 and r.mtype == 2 and r.value == 12.5
     assert (r.received_at - r.ts).total_seconds() == pytest.approx(21600.25)   # flushed 6 h late

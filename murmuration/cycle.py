@@ -121,10 +121,10 @@ class Murmuration:
             route = self.router.route(r.ts, now)
             counts[route.value] += 1
             if route is Route.LATE:
-                late[(r.ptype, r.ts.replace(minute=0, second=0, microsecond=0))] += 1
+                late[(r.mtype, r.ts.replace(minute=0, second=0, microsecond=0))] += 1
             if route is not Route.FRESH or r.device_id not in self.devices or r.instance_index != 1:
                 continue
-            fresh[(r.device_id, r.ptype)].append(r.value)
+            fresh[(r.device_id, r.mtype)].append(r.value)
         self.db.mark_late(late)
 
         if not self.devices:

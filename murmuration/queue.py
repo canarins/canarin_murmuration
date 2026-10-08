@@ -5,7 +5,7 @@ stream and never sits on the hot path. Birdhouse XADDs one entry per canonical
 reading to a Redis stream on the shared ElastiCache; we read it with our own
 consumer group.
 
-Entry fields (strings): device_id, pollutant_id, pollutant_type, instance_index,
+Entry fields (strings): device_id, channel_id, measure_type, instance_index,
 ts (bucketed unix s), value (canonical), received_at (unix s, server clock).
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Iterable, Protocol
 class Record:
     device_id: int
     instance_index: int
-    ptype: int                 # WebFront.pollutant_types.id
+    mtype: int                 # WebFront.pollutant_types.id
     ts: datetime               # event time (device, bucketed)
     value: float
     received_at: datetime      # arrival time (Birdhouse clock)
@@ -28,12 +28,12 @@ class Record:
     def from_fields(cls, f: dict) -> "Record":
         ts = datetime.fromtimestamp(int(float(f["ts"])), tz=timezone.utc)
         ra = datetime.fromtimestamp(float(f.get("received_at", f["ts"])), tz=timezone.utc)
-        return cls(int(f["device_id"]), int(f.get("instance_index", 1)), int(f["pollutant_type"]),
+        return cls(int(f["device_id"]), int(f.get("instance_index", 1)), int(f["measure_type"]),
                    ts, float(f["value"]), ra)
 
     def to_fields(self) -> dict:
-        return {"device_id": str(self.device_id), "pollutant_id": "0",
-                "pollutant_type": str(self.ptype), "instance_index": str(self.instance_index),
+        return {"device_id": str(self.device_id), "channel_id": "0",
+                "measure_type": str(self.mtype), "instance_index": str(self.instance_index),
                 "ts": str(int(self.ts.timestamp())), "value": repr(self.value),
                 "received_at": repr(self.received_at.timestamp())}
 

@@ -29,14 +29,14 @@ def main():
     print("== final trust (PM2.5) ==")
     rows = db.exec("""SELECT t.device_id, t.trust, t.hard_fault_flag FROM MurmurationInternal.device_trust t
                       JOIN (SELECT device_id, MAX(ts) ts FROM MurmurationInternal.device_trust
-                            WHERE pollutant_type=%s GROUP BY device_id) m
-                        ON m.device_id=t.device_id AND m.ts=t.ts WHERE t.pollutant_type=%s ORDER BY 1""", (PM25, PM25))
+                            WHERE measure_type=%s GROUP BY device_id) m
+                        ON m.device_id=t.device_id AND m.ts=t.ts WHERE t.measure_type=%s ORDER BY 1""", (PM25, PM25))
     for d, t, h in rows:
         print(f"  {d:6d} {dev[d][0]:6s} {t:5.2f} {'HARD' if h else ''}")
 
     print("\n== verdicts (PM2.5, count) ==")
     for d, v, n in db.exec("""SELECT device_id, verdict, COUNT(*) FROM MurmurationInternal.anomaly_score
-                              WHERE pollutant_type=%s GROUP BY 1,2 ORDER BY 1,2""", (PM25,)):
+                              WHERE measure_type=%s GROUP BY 1,2 ORDER BY 1,2""", (PM25,)):
         if v != "healthy":
             print(f"  {d:6d} {v:16s} {n}")
 
@@ -55,7 +55,7 @@ def main():
         cid = cell_id(dev[d][2], dev[d][3], step)
         for issued, valid, val, lo, hi in db.exec(
                 """SELECT issued_at, valid_at, value, ci_low, ci_high FROM Murmuration.field_forecast
-                   WHERE pollutant_type=%s AND cell_id=%s AND MINUTE(issued_at)=0""", (PM25, cid)):
+                   WHERE measure_type=%s AND cell_id=%s AND MINUTE(issued_at)=0""", (PM25, cid)):
             base = issued.replace(minute=0, second=0, microsecond=0)
             h = round((valid - base).total_seconds() / 3600)
             y = truth[d].get(valid.strftime("%Y-%m-%d %H:%M:%S"))

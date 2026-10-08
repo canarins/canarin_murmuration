@@ -15,7 +15,7 @@ import numpy as np
 
 @dataclass(frozen=True)
 class CodeSpec:
-    ptype: int          # WebFront.pollutant_types.id
+    mtype: int          # WebFront.pollutant_types.id
     code: str           # e.g. 'PM2.5' (display only)
     role: str
     decoder_head: bool
@@ -29,7 +29,7 @@ class CodeSpec:
 @dataclass(frozen=True)
 class GateHit:
     device_id: int
-    ptype: int
+    mtype: int
     gate: str          # sanity | flatline | nested
     detail: str
 
@@ -59,18 +59,18 @@ def flatline(series: np.ndarray, min_points: int = 6) -> bool:
 
 def nested_violations(record: dict[int, float], registry: dict[int, CodeSpec],
                       rel_tol: float = 0.05, abs_tol: float = 1.0) -> list[tuple[int, int]]:
-    """Return (child, parent) pollutant-type pairs where child > parent beyond tolerance.
+    """Return (child, parent) measure-type pairs where child > parent beyond tolerance.
 
-    record: {pollutant_type: value} for one device at one timestamp.
+    record: {measure_type: value} for one device at one timestamp.
     """
     out = []
-    for ptype, v in record.items():
-        spec = registry.get(ptype)
+    for mtype, v in record.items():
+        spec = registry.get(mtype)
         if spec is None or spec.constraint_kind != "le_parent" or spec.parent_type not in record:
             continue
         p = record[spec.parent_type]
         if v > p * (1 + rel_tol) + abs_tol:
-            out.append((ptype, spec.parent_type))
+            out.append((mtype, spec.parent_type))
     return out
 
 

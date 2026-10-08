@@ -19,8 +19,8 @@ PARIS = (48.8566, 2.3522)
 STEP_MIN = 5
 
 
-PT_PM25, PT_PM10 = 2, 3           # WebFront.pollutant_types ids
-POLLUTANT_ID = {}                  # (device_id, ptype) -> WebFront.pollutants.id, filled by seed_plumage
+MT_PM25, MT_PM10 = 2, 3           # WebFront.pollutant_types ids
+CHANNEL_ID = {}                  # (device_id, mtype) -> WebFront.pollutants.id, filled by seed_plumage
 
 
 @dataclass
@@ -53,8 +53,8 @@ class SynthFleet:
         out = []
         for j, d in enumerate(self.devices):
             v = float(self.pm25[k, j])
-            out.append(Record(d.device_id, 1, PT_PM25, ts, v, ra))
-            out.append(Record(d.device_id, 1, PT_PM10, ts, v * 1.45 + 0.5, ra))
+            out.append(Record(d.device_id, 1, MT_PM25, ts, v, ra))
+            out.append(Record(d.device_id, 1, MT_PM10, ts, v * 1.45 + 0.5, ra))
         return out
 
 
@@ -115,7 +115,7 @@ def make_fleet(n_pico: int = 14, days_hist: int = 21, days_live: int = 2, seed: 
 
 
 def seed_plumage(db, fleet: SynthFleet, until_step: int):
-    """Write devices (hardware + profile), pollutant declarations, virtual sites and
+    """Write devices (hardware + profile), channel declarations, virtual sites and
     the historical canonical readings up to `until_step` (exclusive)."""
     for d in fleet.devices:
         db.exec("INSERT IGNORE INTO Devices.devices_hardware (id_internal, id_native, is_demo, last_lat, last_long, "
@@ -126,17 +126,17 @@ def seed_plumage(db, fleet: SynthFleet, until_step: int):
                 "position_source) VALUES (%s,%s,%s,%s,%s)",
                 (d.device_id, d.device_type, f"{d.device_type}-r1", d.power_source,
                  "gnss" if d.device_type == "pico" else ("phone" if d.power_source == "phone" else "wifi")))
-        for pt, legacy in ((PT_PM25, 7), (PT_PM10, 8)):
+        for pt, legacy in ((MT_PM25, 7), (MT_PM10, 8)):
             db.exec("INSERT IGNORE INTO WebFront.pollutants (device_id, pollutant_type_id, granularity, instance_index, "
                     "scale_factor, legacy_value_id) VALUES (%s,%s,60,1,1.0,%s)", (d.device_id, pt, legacy))
     for (pid, did, pt) in db.exec("SELECT id, device_id, pollutant_type_id FROM WebFront.pollutants"):
-        POLLUTANT_ID[(int(did), int(pt))] = int(pid)
+        CHANNEL_ID[(int(did), int(pt))] = int(pid)
     for sid, la, lo in fleet.sites:
         db.exec("INSERT IGNORE INTO Murmuration.virtual_sensor_site (site_id, lat, lon) VALUES (%s,%s,%s)", (sid, la, lo))
     rows = []
     for k in range(until_step):
         for r in fleet.records_at(k):
-            rows.append((r.device_id, r.ts.replace(tzinfo=None), POLLUTANT_ID[(r.device_id, r.ptype)], r.value, r.value))
+            rows.append((r.device_id, r.ts.replace(tzinfo=None), CHANNEL_ID[(r.device_id, r.mtype)], r.value, r.value))
     for i in range(0, len(rows), 5000):
         db._many("INSERT IGNORE INTO `Data`.data_points_canonical (device_id, time_bucket, pollutant_id, value, raw_value) "
                  "VALUES (%s,%s,%s,%s,%s)", rows[i:i + 5000])
@@ -146,5 +146,5 @@ def store_records(db, records: list[Record], received_at: datetime | None = None
     """What Birdhouse does on the hot path: idempotent canonical insert (then XADD)."""
     db._many("INSERT IGNORE INTO `Data`.data_points_canonical (device_id, time_bucket, pollutant_id, value, raw_value) "
              "VALUES (%s,%s,%s,%s,%s)",
-             [(r.device_id, r.ts.replace(tzinfo=None), POLLUTANT_ID[(r.device_id, r.ptype)], r.value, r.value)
+             [(r.device_id, r.ts.replace(tzinfo=None), CHANNEL_ID[(r.device_id, r.mtype)], r.value, r.value)
               for r in records])

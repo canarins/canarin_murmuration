@@ -117,7 +117,7 @@ def test_public_outputs_never_name_a_source(run):
         cols = {r[0] for r in run["db"].exec(
             "SELECT column_name FROM information_schema.columns WHERE table_schema='Murmuration' "
             "AND table_name=%s", (table,))}
-        assert cols and not cols & {"device_id", "instance_index", "contributors", "pollutant_id"}, table
+        assert cols and not cols & {"device_id", "instance_index", "contributors", "channel_id"}, table
 
 
 def test_outputs_written_with_credibility(run):

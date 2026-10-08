@@ -2,7 +2,7 @@
 (decision: Oracle's kriging is the always-on encoder and bootstrap fallback,
 not a throwaway MVP).
 
-Model, per pollutant type:
+Model, per measure type:
   y_i(t) = clim_i(hour) + a(x_i, t) + eps_i
   a(., t) ~ zero-mean GP, cov s2 * exp(-d / L)
   a(x, t+h) = phi^h * a(x, t) + innovation      (AR(1) anomaly persistence)

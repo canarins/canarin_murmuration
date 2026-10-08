@@ -92,18 +92,18 @@ class Plumage:
 
     def registry(self) -> dict[int, CodeSpec]:
         rows = self._q(
-            "SELECT pollutant_type, code, role, decoder_head, cold_start_trust, sanity_min, sanity_max, "
-            "parent_type, constraint_kind FROM Murmuration.type_registry")
+            "SELECT measure_type, code, role, decoder_head, cold_start_trust, sanity_min, sanity_max, "
+            "parent_type, constraint_kind FROM Murmuration.measure_registry")
         return {int(r[0]): CodeSpec(int(r[0]), r[1], r[2], bool(r[3]), float(r[4]), r[5], r[6],
                                     None if r[7] is None else int(r[7]), r[8]) for r in rows}
 
-    def hourly_history(self, ptype: int, since: datetime, until: datetime,
+    def hourly_history(self, mtype: int, since: datetime, until: datetime,
                        device_ids: list[int], instance_index: int = 1
                        ) -> tuple[np.ndarray, np.ndarray, list[datetime]]:
         """[T, N] hourly mean matrix (NaN where missing) + hour-of-day + hour grid.
 
         Joins data_points_canonical to WebFront.pollutants to select the channel
-        (pollutant type + instance) — that join is the real vocabulary.
+        (measure type + instance) — that join is the real vocabulary.
         """
         rows = self._q(
             "SELECT c.device_id, DATE_FORMAT(c.time_bucket, '%%Y-%%m-%%d %%H:00:00'), AVG(c.value) "
@@ -111,7 +111,7 @@ class Plumage:
             "JOIN WebFront.pollutants p ON p.id = c.pollutant_id "
             "WHERE p.pollutant_type_id = %s AND p.instance_index = %s "
             "  AND c.time_bucket >= %s AND c.time_bucket < %s "
-            "GROUP BY 1, 2", (ptype, instance_index, _naive_utc(since), _naive_utc(until)))
+            "GROUP BY 1, 2", (mtype, instance_index, _naive_utc(since), _naive_utc(until)))
         start = _aware(since).replace(minute=0, second=0, microsecond=0)
         T = max(1, int((_aware(until) - start).total_seconds() // 3600))
         grid = [start + timedelta(hours=i) for i in range(T)]
@@ -125,11 +125,11 @@ class Plumage:
                 S[i, j] = float(v)
         return S, np.array([g.hour for g in grid]), grid
 
-    def history_days(self, ptype: int, now: datetime) -> float:
+    def history_days(self, mtype: int, now: datetime) -> float:
         r = self._q(
             "SELECT MIN(c.time_bucket) FROM `Data`.data_points_canonical c "
             "JOIN WebFront.pollutants p ON p.id = c.pollutant_id "
-            "WHERE p.pollutant_type_id = %s AND c.time_bucket <= %s", (ptype, _naive_utc(now)))
+            "WHERE p.pollutant_type_id = %s AND c.time_bucket <= %s", (mtype, _naive_utc(now)))
         return 0.0 if r[0][0] is None else (_aware(now) - _aware(r[0][0])).total_seconds() / 86400.0
 
     def virtual_sites(self) -> list[tuple[str, float, float]]:
@@ -144,25 +144,25 @@ class Plumage:
                    f"ON DUPLICATE KEY UPDATE {upd}", rows)
 
     def write_forecasts(self, rows):
-        cols = ["model_version", "issued_at", "valid_at", "cell_id", "lat", "lon", "pollutant_type", "code",
+        cols = ["model_version", "issued_at", "valid_at", "cell_id", "lat", "lon", "measure_type", "code",
                 "value", "ci_low", "ci_high", "credibility", "band", "provisional"]
-        self._upsert("Murmuration.field_forecast", cols, cols[:4] + ["pollutant_type"],
+        self._upsert("Murmuration.field_forecast", cols, cols[:4] + ["measure_type"],
                      [(r[0], _naive_utc(r[1]), _naive_utc(r[2]), *r[3:]) for r in rows])
 
     def write_virtual(self, rows):
-        cols = ["model_version", "ts", "site_id", "lat", "lon", "pollutant_type", "code",
+        cols = ["model_version", "ts", "site_id", "lat", "lon", "measure_type", "code",
                 "value", "ci_low", "ci_high", "credibility", "band"]
-        self._upsert("Murmuration.virtual_sensor", cols, ["model_version", "ts", "site_id", "pollutant_type"],
+        self._upsert("Murmuration.virtual_sensor", cols, ["model_version", "ts", "site_id", "measure_type"],
                      [(r[0], _naive_utc(r[1]), *r[2:]) for r in rows])
 
     def write_anomalies(self, rows):
-        cols = ["model_version", "device_id", "instance_index", "pollutant_type", "ts",
+        cols = ["model_version", "device_id", "instance_index", "measure_type", "ts",
                 "observed", "expected", "score", "verdict", "credibility"]
         self._upsert("MurmurationInternal.anomaly_score", cols, cols[:5],
                      [(*r[:4], _naive_utc(r[4]), *r[5:]) for r in rows])
 
     def write_trust(self, rows):
-        cols = ["model_version", "device_id", "pollutant_type", "ts", "trust", "hard_fault_flag", "credibility"]
+        cols = ["model_version", "device_id", "measure_type", "ts", "trust", "hard_fault_flag", "credibility"]
         self._upsert("MurmurationInternal.device_trust", cols, cols[:4],
                      [(*r[:3], _naive_utc(r[3]), r[4], int(bool(r[5])), r[6]) for r in rows])
 
@@ -178,7 +178,7 @@ class Plumage:
 
     def mark_late(self, counts: dict[tuple[int, datetime], int]):
         self._many(
-            "INSERT INTO MurmurationInternal.reanalysis_queue (pollutant_type, ts_hour, n_late) VALUES (%s, %s, %s) "
+            "INSERT INTO MurmurationInternal.reanalysis_queue (measure_type, ts_hour, n_late) VALUES (%s, %s, %s) "
             "ON DUPLICATE KEY UPDATE n_late = n_late + VALUES(n_late)",
             [(c, _naive_utc(h), n) for (c, h), n in counts.items()])
 
