@@ -44,11 +44,10 @@ class MemoryState:
 
 
 class RedisState:
-    PFX = "murm:"
-
-    def __init__(self, url: str):
+    def __init__(self, url: str, prefix: str = "murm:"):
         import redis
-        self.r = redis.Redis.from_url(url, decode_responses=True)
+        self.PFX = prefix
+        self.r = redis.Redis.from_url(url, decode_responses=True, socket_timeout=10)
 
     def get_trust(self, d, c):
         raw = self.r.hget(self.PFX + "trust", f"{d}|{c}")
@@ -66,12 +65,13 @@ class RedisState:
         for k, raw in self.r.hgetall(self.PFX + "trust").items():
             d, c = k.rsplit("|", 1)
             j = json.loads(raw)
-            out[(d, c)] = TrustState(trust=j["t"], hard_fault=j["h"], n_updates=j["n"])
+            out[(int(d), int(c))] = TrustState(trust=j["t"], hard_fault=j["h"], n_updates=j["n"])
         return out
 
     def _getf(self, h, d):
         v = self.r.hget(self.PFX + h, d)
         return None if v is None else float(v)
+
 
     def get_exposure(self, d): return self._getf("exposure", d)
     def set_exposure(self, d, v): self.r.hset(self.PFX + "exposure", d, v)

@@ -7,7 +7,6 @@ two Femto archetypes (mains = indoor, phone = personal exposure).
 """
 from __future__ import annotations
 
-import io
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -20,9 +19,13 @@ PARIS = (48.8566, 2.3522)
 STEP_MIN = 5
 
 
+PT_PM25, PT_PM10 = 2, 3           # WebFront.pollutant_types ids
+POLLUTANT_ID = {}                  # (device_id, ptype) -> WebFront.pollutants.id, filled by seed_plumage
+
+
 @dataclass
 class SynthDevice:
-    device_id: str
+    device_id: int
     device_type: str
     power_source: str
     lat: float
@@ -44,13 +47,14 @@ class SynthFleet:
     def time_of(self, k: int) -> datetime:
         return self.start + timedelta(minutes=STEP_MIN * k)
 
-    def records_at(self, k: int, ts: datetime | None = None) -> list[Record]:
-        ts = ts or self.time_of(k)
+    def records_at(self, k: int, received_at: datetime | None = None) -> list[Record]:
+        ts = self.time_of(k)
+        ra = received_at or ts
         out = []
         for j, d in enumerate(self.devices):
             v = float(self.pm25[k, j])
-            out.append(Record(d.device_id, 0, "pm25", ts, v))
-            out.append(Record(d.device_id, 0, "pm10", ts, v * 1.45 + 0.5))
+            out.append(Record(d.device_id, 1, PT_PM25, ts, v, ra))
+            out.append(Record(d.device_id, 1, PT_PM10, ts, v * 1.45 + 0.5, ra))
         return out
 
 
@@ -64,11 +68,9 @@ def make_fleet(n_pico: int = 14, days_hist: int = 21, days_live: int = 2, seed: 
     for i in range(n_pico):
         lat = PARIS[0] + rng.uniform(-0.03, 0.03)
         lon = PARIS[1] + rng.uniform(-0.045, 0.045)
-        devs.append(SynthDevice(f"pico-{i:03d}", "pico", "mains", lat, lon))
-    devs.append(SynthDevice("femto-mains-01", "femto", "mains",
-                            PARIS[0] + 0.004, PARIS[1] - 0.006))
-    devs.append(SynthDevice("femto-phone-01", "femto", "phone",
-                            PARIS[0] - 0.006, PARIS[1] + 0.008))
+        devs.append(SynthDevice(1000 + i, "pico", "mains", lat, lon))
+    devs.append(SynthDevice(2001, "femto", "mains", PARIS[0] + 0.004, PARIS[1] - 0.006))   # indoor
+    devs.append(SynthDevice(2002, "femto", "phone", PARIS[0] - 0.006, PARIS[1] + 0.008))   # personal
     if faults and n_pico >= 4:
         live0 = days_hist * 24 * 60 // STEP_MIN
         devs[1].fault, devs[1].fault_at_step = "stuck", live0 - 12 * 6     # 6 h before live window
@@ -113,33 +115,36 @@ def make_fleet(n_pico: int = 14, days_hist: int = 21, days_live: int = 2, seed: 
 
 
 def seed_plumage(db, fleet: SynthFleet, until_step: int):
-    """Write devices, virtual sites and the historical readings up to `until_step` (exclusive)."""
-    with db.conn.cursor() as cur:
-        for d in fleet.devices:
-            cur.execute(
-                "INSERT INTO devices (device_id, device_type, device_model, power_source, lat, lon, "
-                "position_source) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (device_id) DO NOTHING",
-                (d.device_id, d.device_type, f"{d.device_type}-r1", d.power_source, d.lat, d.lon,
+    """Write devices (hardware + profile), pollutant declarations, virtual sites and
+    the historical canonical readings up to `until_step` (exclusive)."""
+    for d in fleet.devices:
+        db.exec("INSERT IGNORE INTO Devices.devices_hardware (id_internal, id_native, is_demo, last_lat, last_long, "
+                "gps_hdop, gps_satellites) VALUES (%s,%s,0,%s,%s,%s,%s)",
+                (d.device_id, f"synth-{d.device_id}", d.lat, d.lon,
+                 1.2 if d.device_type == "pico" else None, 9 if d.device_type == "pico" else None))
+        db.exec("INSERT IGNORE INTO Murmuration.device_profile (device_id, device_type, device_model, power_source, "
+                "position_source) VALUES (%s,%s,%s,%s,%s)",
+                (d.device_id, d.device_type, f"{d.device_type}-r1", d.power_source,
                  "gnss" if d.device_type == "pico" else ("phone" if d.power_source == "phone" else "wifi")))
-        for sid, la, lo in fleet.sites:
-            cur.execute("INSERT INTO virtual_sensor_site (site_id, lat, lon) VALUES (%s,%s,%s) "
-                        "ON CONFLICT DO NOTHING", (sid, la, lo))
-    buf = io.StringIO()
+        for pt, legacy in ((PT_PM25, 7), (PT_PM10, 8)):
+            db.exec("INSERT IGNORE INTO WebFront.pollutants (device_id, pollutant_type_id, granularity, instance_index, "
+                    "scale_factor, legacy_value_id) VALUES (%s,%s,60,1,1.0,%s)", (d.device_id, pt, legacy))
+    for (pid, did, pt) in db.exec("SELECT id, device_id, pollutant_type_id FROM WebFront.pollutants"):
+        POLLUTANT_ID[(int(did), int(pt))] = int(pid)
+    for sid, la, lo in fleet.sites:
+        db.exec("INSERT IGNORE INTO Murmuration.virtual_sensor_site (site_id, lat, lon) VALUES (%s,%s,%s)", (sid, la, lo))
+    rows = []
     for k in range(until_step):
-        ts = fleet.time_of(k).isoformat()
         for r in fleet.records_at(k):
-            buf.write(f"{r.device_id}\t0\t{r.code}\t{ts}\t{r.value:.4f}\t{ts}\n")
-    buf.seek(0)
-    with db.conn.cursor() as cur:
-        with cur.copy("COPY readings (device_id, instance_index, normalized_code, ts, value, received_at) "
-                      "FROM STDIN") as cp:
-            cp.write(buf.read())
+            rows.append((r.device_id, r.ts.replace(tzinfo=None), POLLUTANT_ID[(r.device_id, r.ptype)], r.value, r.value))
+    for i in range(0, len(rows), 5000):
+        db._many("INSERT IGNORE INTO `Data`.data_points_canonical (device_id, time_bucket, pollutant_id, value, raw_value) "
+                 "VALUES (%s,%s,%s,%s,%s)", rows[i:i + 5000])
 
 
-def store_records(db, records: list[Record], received_at: datetime):
-    """What Birdhouse does on the hot path: idempotent write to Plumage (before fan-out)."""
-    with db.conn.cursor() as cur:
-        cur.executemany(
-            "INSERT INTO readings (device_id, instance_index, normalized_code, ts, value, received_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
-            [(r.device_id, r.instance_index, r.code, r.ts, r.value, received_at) for r in records])
+def store_records(db, records: list[Record], received_at: datetime | None = None):
+    """What Birdhouse does on the hot path: idempotent canonical insert (then XADD)."""
+    db._many("INSERT IGNORE INTO `Data`.data_points_canonical (device_id, time_bucket, pollutant_id, value, raw_value) "
+             "VALUES (%s,%s,%s,%s,%s)",
+             [(r.device_id, r.ts.replace(tzinfo=None), POLLUTANT_ID[(r.device_id, r.ptype)], r.value, r.value)
+              for r in records])

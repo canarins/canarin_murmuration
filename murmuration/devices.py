@@ -14,7 +14,7 @@ import numpy as np
 
 @dataclass(frozen=True)
 class DeviceInfo:
-    device_id: str
+    device_id: int
     device_type: str            # pico | femto | other
     device_model: str | None
     power_source: str | None    # mains | battery | phone

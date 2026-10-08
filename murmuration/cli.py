@@ -2,7 +2,7 @@
 
   murmuration migrate [--outputs-only]     apply db/migrations (stub Plumage + outputs)
   murmuration seed [--days 21]             synthetic Paris fleet + history (local dev only)
-  murmuration train [--code pm25 ...]      fit field params on Plumage history -> new artifact
+  murmuration train [--type 2 3]           fit field params on Plumage history -> new artifact
   murmuration cycle                        run one nowcast cycle now
   murmuration run [--interval 300]         run cycles forever (the Fargate task)
   murmuration simulate [--cycles 24]       replay synthetic live data through the full loop
@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import logging
 import time
@@ -23,25 +24,25 @@ from .config import Settings
 from .cycle import Murmuration
 from .field import fit_params, residual_scales
 from .geo import to_km
-from .plumage import Plumage
-from .queue import RedisStreamQueue, SQSQueue
+from .plumage import connect_from_settings
+from .queue import RedisStreamQueue
 from .state import RedisState
+
+PM25, PM10 = 2, 3   # WebFront.pollutant_types ids
 
 
 def _queue(s: Settings):
-    if s.queue == "sqs":
-        import os
-        return SQSQueue(s.sqs_url, os.environ.get("MURM_SQS_ENDPOINT") or None)
-    return RedisStreamQueue(s.redis_url, s.stream_key)
+    return RedisStreamQueue(s.redis_url(), s.stream_key)
 
 
 def _service(s: Settings) -> Murmuration:
-    return Murmuration(s, Plumage(s.pg_dsn), _queue(s), RedisState(s.redis_url), ArtifactStore(s.artifacts))
+    return Murmuration(s, connect_from_settings(s), _queue(s), RedisState(s.redis_url(), s.state_prefix),
+                       ArtifactStore(s.artifacts))
 
 
-def cmd_train(s: Settings, codes: list[str], days: int, until: datetime | None = None):
+def cmd_train(s: Settings, codes: list[int], days: int, until: datetime | None = None):
     from .devices import exposure_prior
-    db = Plumage(s.pg_dsn)
+    db = connect_from_settings(s)
     devs = db.devices()
     ids = sorted(d for d, i in devs.items() if exposure_prior(i)[0] >= 0.7)   # ambient stations
     judged = sorted(d for d, i in devs.items() if exposure_prior(i)[1] != "personal")
@@ -53,13 +54,14 @@ def cmd_train(s: Settings, codes: list[str], days: int, until: datetime | None =
     until = until or datetime.now(timezone.utc)
     payload = {"trained_at": until.isoformat(), "codes": {}, "report": {}, "residual": {}}
     for code in codes:
+        code = int(code)
         S, hours, _ = db.hourly_history(code, until - timedelta(days=days), until, ids)
         p, rep = fit_params(S, hours, pos, s.length_scale_km)
         payload["codes"][code] = p.to_dict()
         payload["report"][code] = rep
         Sj, hj, _ = db.hourly_history(code, until - timedelta(days=days), until, judged)
         bias, scale = residual_scales(Sj, hj, pos_j, ambient_mask, p, s.neighbour_radius_km)
-        payload["residual"][code] = {d: [float(b), float(sc)] for d, b, sc in zip(judged, bias, scale)
+        payload["residual"][code] = {str(d): [float(b), float(sc)] for d, b, sc in zip(judged, bias, scale)
                                      if np.isfinite(b) and np.isfinite(sc)}
     version = "kriging-" + until.strftime("%Y%m%dT%H%M%S")
     ArtifactStore(s.artifacts).save(version, payload)
@@ -75,25 +77,25 @@ def cmd_simulate(s: Settings, cycles: int, days_hist: int, n_pico: int, outage: 
     """
     from .synthetic import make_fleet, seed_plumage, store_records
     fleet = make_fleet(n_pico=n_pico, days_hist=days_hist, days_live=max(1, cycles // 288 + 1))
-    db = Plumage(s.pg_dsn)
+    db = connect_from_settings(s)
     live0 = days_hist * 24 * 60 // 5
     seed_plumage(db, fleet, live0)
-    version, _ = cmd_train(s, ["pm25", "pm10"], days=days_hist, until=fleet.time_of(live0))
+    version, _ = cmd_train(s, [PM25, PM10], days=days_hist, until=fleet.time_of(live0))
     q = _queue(s)
-    svc = Murmuration(s, db, q, RedisState(s.redis_url), ArtifactStore(s.artifacts))
+    svc = Murmuration(s, db, q, RedisState(s.redis_url(), s.state_prefix), ArtifactStore(s.artifacts))
     dark = fleet.devices[5].device_id if outage else None
     buffered = []
     out = []
     for c in range(cycles):
         k = live0 + c
         now = fleet.time_of(k) + timedelta(seconds=30)
-        recs = fleet.records_at(k)
+        recs = fleet.records_at(k, received_at=now)
         if dark and c < 72:                       # 6 h outage, buffered on device
             buffered += [r for r in recs if r.device_id == dark]
             recs = [r for r in recs if r.device_id != dark]
         elif dark and c == 72:                    # reconnects: flushes 6 h of old readings
-            recs += buffered
-        store_records(db, recs, now)
+            recs += [replace(r, received_at=now) for r in buffered]
+        store_records(db, recs)
         q.publish(recs)
         out.append(svc.run_cycle(now))
     return version, out
@@ -105,7 +107,8 @@ def main(argv=None):
     m = sub.add_parser("migrate"); m.add_argument("--outputs-only", action="store_true")
     sd = sub.add_parser("seed"); sd.add_argument("--days", type=int, default=21)
     sd.add_argument("--picos", type=int, default=14)
-    tr = sub.add_parser("train"); tr.add_argument("--code", nargs="+", default=["pm25", "pm10"])
+    tr = sub.add_parser("train"); tr.add_argument("--type", nargs="+", type=int, default=[PM25, PM10],
+                                                  help="WebFront.pollutant_types ids (2=PM2.5, 3=PM10)")
     tr.add_argument("--days", type=int, default=30)
     sub.add_parser("cycle")
     rn = sub.add_parser("run"); rn.add_argument("--interval", type=int, default=300)
@@ -117,15 +120,15 @@ def main(argv=None):
     s = Settings()
 
     if a.cmd == "migrate":
-        Plumage(s.pg_dsn).migrate(include_stub=not a.outputs_only); print("migrated")
+        connect_from_settings(s).migrate(include_stub=not a.outputs_only); print("migrated")
     elif a.cmd == "seed":
         from .synthetic import make_fleet, seed_plumage
         f = make_fleet(n_pico=a.picos, days_hist=a.days, days_live=1,
                        start=datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
                        - timedelta(days=a.days))
-        seed_plumage(Plumage(s.pg_dsn), f, a.days * 288); print(f"seeded {len(f.devices)} devices")
+        seed_plumage(connect_from_settings(s), f, a.days * 288); print(f"seeded {len(f.devices)} devices")
     elif a.cmd == "train":
-        v, rep = cmd_train(s, a.code, a.days); print(v); print(json.dumps(rep, indent=1))
+        v, rep = cmd_train(s, a.type, a.days); print(v); print(json.dumps(rep, indent=1))
     elif a.cmd == "cycle":
         print(json.dumps(_service(s).run_cycle(), indent=1, default=str))
     elif a.cmd == "run":

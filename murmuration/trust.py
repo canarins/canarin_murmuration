@@ -56,7 +56,7 @@ def hard_gate(state: TrustState, p: TrustParams) -> TrustState:
     return TrustState(trust=p.floor, hard_fault=True, n_updates=state.n_updates + 1)
 
 
-def is_probe_cycle(device_id: str, code: str, cycle_index: int, p: TrustParams) -> bool:
+def is_probe_cycle(device_id, code, cycle_index: int, p: TrustParams) -> bool:
     """Deterministic, staggered forced-listening schedule (one slot per device/day)."""
     slot = zlib.crc32(f"{device_id}|{code}".encode()) % p.probe_every_cycles
     return cycle_index % p.probe_every_cycles == slot

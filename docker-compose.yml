@@ -1,46 +1,41 @@
-# Local dev stack for Murmuration.
-#   postgres  — stands in for Plumage (authoritative store); migrations auto-applied
-#   redis     — fast/slow model state AND the local stand-in for the SQS fan-out (Redis stream)
-#   localstack— optional: real SQS + S3 APIs, to exercise the AWS code paths locally
+# Local dev stack for Murmuration (mirrors prod: MySQL 8.4 + Redis 7).
+#   mysql — stands in for the Canarin RDS; schemas Devices/WebFront/Data are created
+#           by `murmuration migrate` (dev stub) — never apply that stub in prod
+#   redis — model state AND the Birdhouse fan-out stream (birdhouse:fanout)
 services:
-  postgres:
-    image: postgres:16
+  mysql:
+    image: mysql:8.4
     environment:
-      POSTGRES_USER: plumage
-      POSTGRES_PASSWORD: plumage
-      POSTGRES_DB: plumage
-    ports: ["5432:5432"]
-    volumes:
-      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: plumage
+      MYSQL_PASSWORD: plumage
+      MYSQL_DATABASE: Murmuration
+    command: ["mysqld", "--default-time-zone=+00:00"]
+    ports: ["3306:3306"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U plumage"]
-      interval: 2s
-      retries: 20
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uplumage", "-pplumage"]
+      interval: 3s
+      retries: 30
 
   redis:
     image: redis:7
     ports: ["6379:6379"]
 
-  localstack:
-    image: localstack/localstack:3
-    profiles: ["aws"]
-    environment:
-      SERVICES: sqs,s3
-    ports: ["4566:4566"]
-
   murmuration:
     build: .
     depends_on:
-      postgres: {condition: service_healthy}
+      mysql: {condition: service_healthy}
       redis: {condition: service_started}
     environment:
-      MURM_PG_DSN: postgresql://plumage:plumage@postgres:5432/plumage
-      MURM_REDIS_URL: redis://redis:6379/0
-      MURM_QUEUE: redis
+      DB_HOST: mysql
+      DB_USER: root            # the dev stub creates schemas; prod user is murmuration_app
+      DB_PASS: root
+      REDIS_HOST: redis
+      REDIS_TLS: "false"
       MURM_ARTIFACTS: file:///artifacts
     volumes:
       - artifacts:/artifacts
-    command: ["murmuration", "run", "--interval", "300"]
+    command: ["sh", "-c", "murmuration migrate && murmuration run --interval 300"]
 
 volumes:
   artifacts:

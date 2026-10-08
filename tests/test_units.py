@@ -51,7 +51,7 @@ def test_healthy_device_converges_high():
 
 
 def test_probe_schedule_once_per_period():
-    hits = [c for c in range(288 * 3) if is_probe_cycle("pico-001", "pm25", c, TP)]
+    hits = [c for c in range(288 * 3) if is_probe_cycle(1001, 2, c, TP)]
     assert len(hits) == 3 and hits[1] - hits[0] == 288
 
 
@@ -61,14 +61,15 @@ def test_pooled_prior_shrinks_small_groups():
 
 
 # ------------------------------------------------------------------ gates --
+PM25, PM10 = 2, 3
 SPECS = {
-    "pm10": CodeSpec("pm10", "target", True, 0.6, 0, 2000, None, None),
-    "pm25": CodeSpec("pm25", "target", True, 0.6, 0, 2000, "pm10", "le_parent"),
+    PM10: CodeSpec(PM10, "PM10", "target", True, 0.6, 0, 2000, None, None),
+    PM25: CodeSpec(PM25, "PM2.5", "target", True, 0.6, 0, 2000, PM10, "le_parent"),
 }
 
 
 def test_sanity_window():
-    assert sanity(10, SPECS["pm25"]) and not sanity(-1, SPECS["pm25"]) and not sanity(np.nan, SPECS["pm25"])
+    assert sanity(10, SPECS[PM25]) and not sanity(-1, SPECS[PM25]) and not sanity(np.nan, SPECS[PM25])
 
 
 def test_flatline_uses_trailing_run():
@@ -77,15 +78,15 @@ def test_flatline_uses_trailing_run():
 
 
 def test_nested_violation_and_attribution():
-    assert nested_violations({"pm25": 50, "pm10": 20}, SPECS) == [("pm25", "pm10")]
-    assert nested_violations({"pm25": 20, "pm10": 20.5}, SPECS) == []
-    assert attribute(4.0, 0.3, "pm25", "pm10") == "pm25"
-    assert attribute(0.2, -5.0, "pm25", "pm10") == "pm10"
+    assert nested_violations({PM25: 50, PM10: 20}, SPECS) == [(PM25, PM10)]
+    assert nested_violations({PM25: 20, PM10: 20.5}, SPECS) == []
+    assert attribute(4.0, 0.3, PM25, PM10) == PM25
+    assert attribute(0.2, -5.0, PM25, PM10) == PM10
 
 
 # ---------------------------------------------------------------- devices --
 def test_exposure_priors_by_power_source():
-    mk = lambda t, p: DeviceInfo("d", t, None, p, 0, 0, None, None)
+    mk = lambda t, p: DeviceInfo(1, t, None, p, 0, 0, None, None)
     assert exposure_prior(mk("pico", "mains")) == (1.0, "outdoor")
     assert exposure_prior(mk("femto", "phone")) == (0.0, "personal")
     assert exposure_prior(mk("femto", "mains"))[1] == "indoor"
@@ -139,9 +140,19 @@ def test_credibility_floors_and_timeliness():
 # -------------------------------------------------------------- artifacts --
 def test_artifacts_are_immutable_and_rollback(tmp_path):
     st = ArtifactStore(f"file://{tmp_path}")
-    st.save("v1", {"codes": {}}); st.save("v2", {"codes": {"pm25": {}}})
+    st.save("v1", {"codes": {}}); st.save("v2", {"codes": {"2": {}}})
     assert st.load_current()[0] == "v2"
     with pytest.raises(FileExistsError):
         st.save("v1", {})
     st.set_current("v1")
     assert st.load_current()[0] == "v1"
+
+
+# ------------------------------------------------------------------ queue --
+def test_record_parses_birdhouse_stream_entry():
+    from murmuration.queue import Record
+    r = Record.from_fields({"device_id": "72", "pollutant_id": "415", "pollutant_type": "2",
+                            "instance_index": "1", "ts": "1700000000", "value": "12.5",
+                            "received_at": "1700021600.25"})
+    assert r.device_id == 72 and r.ptype == 2 and r.value == 12.5
+    assert (r.received_at - r.ts).total_seconds() == pytest.approx(21600.25)   # flushed 6 h late

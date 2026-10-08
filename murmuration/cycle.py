@@ -61,8 +61,8 @@ class Murmuration:
         cur = self.artifacts.load_current()
         if cur:
             self.model_version, payload = cur
-            self._params = {c: FieldParams.from_dict(p) for c, p in payload["codes"].items()}
-            self._resid = {c: {d: tuple(v) for d, v in m.items()}
+            self._params = {int(c): FieldParams.from_dict(p) for c, p in payload["codes"].items()}
+            self._resid = {int(c): {int(d): tuple(v) for d, v in m.items()}
                            for c, m in payload.get("residual", {}).items()}
             log.info("loaded model %s (%d codes)", self.model_version, len(self._params))
 
@@ -116,13 +116,15 @@ class Murmuration:
         late = defaultdict(int)
         fresh = defaultdict(list)                      # (dev, code) -> [values]
         for r in records:
+            # Route by EVENT time against the cycle clock: a buffer flushed after an
+            # outage carries old ts and new received_at, and is late, not fresh.
             route = self.router.route(r.ts, now)
             counts[route.value] += 1
             if route is Route.LATE:
-                late[(r.code, r.ts.replace(minute=0, second=0, microsecond=0))] += 1
-            if route is not Route.FRESH or r.device_id not in self.devices or r.instance_index != 0:
+                late[(r.ptype, r.ts.replace(minute=0, second=0, microsecond=0))] += 1
+            if route is not Route.FRESH or r.device_id not in self.devices or r.instance_index != 1:
                 continue
-            fresh[(r.device_id, r.code)].append(r.value)
+            fresh[(r.device_id, r.ptype)].append(r.value)
         self.db.mark_late(late)
 
         if not self.devices:
@@ -233,7 +235,7 @@ class Murmuration:
                     verdict = "healthy" if zz < 3 else ("fault" if st.trust < 0.5 else "transient")
                 self.state.set_trust(d, code, st)
                 pc["trust"][i] = st
-                an_rows.append((self.model_version, d, 0, code, now, float(pc["anom"][i] + pc["params"].clim_hour[now.hour]),
+                an_rows.append((self.model_version, d, 1, code, now, float(pc["anom"][i] + pc["params"].clim_hour[now.hour]),
                                 float(pc["mu"][i] + pc["params"].clim_hour[now.hour]), float(pc["z"][i]), verdict,
                                 0.0))
                 if checkpoint:
@@ -268,9 +270,10 @@ class Murmuration:
                 valid = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=h)
                 hs = f_score * (0.97 ** (h - 1))    # longer leads are a little less credible
                 for k, cid in enumerate(cells):
-                    fc_rows.append((self.model_version, now, valid, cid, centres[k][0], centres[k][1], code,
+                    fc_rows.append((self.model_version, now, valid, cid, centres[k][0], centres[k][1],
+                                    code, registry[code].code,
                                     max(0.0, float(val[k])), max(0.0, float(lo[k])), float(hi[k]),
-                                    hs, cred.band(hs), prov))
+                                    hs, cred.band(hs), int(prov)))
 
             if sites:
                 s_km = to_km([s[1] for s in sites], [s[2] for s in sites], lat0, lon0)
@@ -281,13 +284,14 @@ class Murmuration:
                     vsup = cred.Support(hist_days[code], eff, contrib_trust, min(1.0, coverage), int(dens[k]))
                     vsc = cred.score_virtual(vsup, cap=self.s.provisional_cap,
                                              min_days=self.s.min_history_days, min_devices=self.s.min_devices)
-                    vs_rows.append((self.model_version, now, sid, la, lo_, code, max(0.0, float(val[k])),
-                                    max(0.0, float(lo[k])), float(hi[k]), vsc, cred.band(vsc)))
+                    vs_rows.append((self.model_version, now, sid, la, lo_, code, registry[code].code,
+                                    max(0.0, float(val[k])), max(0.0, float(lo[k])), float(hi[k]),
+                                    vsc, cred.band(vsc)))
 
             # per-device state credibility = history-weighted forecast score
             an_rows = [r[:-1] + (f_score,) if r[3] == code else r for r in an_rows]
             tr_rows = [r[:-1] + [f_score] if r[2] == code else r for r in tr_rows]
-            summary[code] = dict(devices=len(devs), assimilated=int(m.sum()), gated=n_gated,
+            summary[registry[code].code] = dict(devices=len(devs), assimilated=int(m.sum()), gated=n_gated,
                                  effective_fleet=round(eff, 2), credibility=round(f_score, 3),
                                  provisional=prov, history_days=round(hist_days[code], 1))
 

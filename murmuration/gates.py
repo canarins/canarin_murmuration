@@ -15,20 +15,21 @@ import numpy as np
 
 @dataclass(frozen=True)
 class CodeSpec:
-    code: str
+    ptype: int          # WebFront.pollutant_types.id
+    code: str           # e.g. 'PM2.5' (display only)
     role: str
     decoder_head: bool
     cold_start_trust: float
     sanity_min: float | None
     sanity_max: float | None
-    parent_code: str | None
+    parent_type: int | None
     constraint_kind: str | None
 
 
 @dataclass(frozen=True)
 class GateHit:
-    device_id: str
-    code: str
+    device_id: int
+    ptype: int
     gate: str          # sanity | flatline | nested
     detail: str
 
@@ -56,23 +57,23 @@ def flatline(series: np.ndarray, min_points: int = 6) -> bool:
     return float(np.std(s[-min_points:])) < 1e-9
 
 
-def nested_violations(record: dict[str, float], registry: dict[str, CodeSpec],
-                      rel_tol: float = 0.05, abs_tol: float = 1.0) -> list[tuple[str, str]]:
-    """Return (child, parent) pairs where child > parent beyond tolerance.
+def nested_violations(record: dict[int, float], registry: dict[int, CodeSpec],
+                      rel_tol: float = 0.05, abs_tol: float = 1.0) -> list[tuple[int, int]]:
+    """Return (child, parent) pollutant-type pairs where child > parent beyond tolerance.
 
-    record: {normalized_code: value} for one device at one timestamp.
+    record: {pollutant_type: value} for one device at one timestamp.
     """
     out = []
-    for code, v in record.items():
-        spec = registry.get(code)
-        if spec is None or spec.constraint_kind != "le_parent" or spec.parent_code not in record:
+    for ptype, v in record.items():
+        spec = registry.get(ptype)
+        if spec is None or spec.constraint_kind != "le_parent" or spec.parent_type not in record:
             continue
-        p = record[spec.parent_code]
+        p = record[spec.parent_type]
         if v > p * (1 + rel_tol) + abs_tol:
-            out.append((code, spec.parent_code))
+            out.append((ptype, spec.parent_type))
     return out
 
 
-def attribute(child_z: float, parent_z: float, child: str, parent: str) -> str:
+def attribute(child_z: float, parent_z: float, child: int, parent: int) -> int:
     """Blame the channel that broke its own (neighbours-only) expectation more."""
     return child if abs(child_z) >= abs(parent_z) else parent

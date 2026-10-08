@@ -1,0 +1,41 @@
+{
+  "family": "canarin-murmuration",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::692953548549:role/canarin-ecs-task-execution-role",
+  "taskRoleArn": "arn:aws:iam::692953548549:role/canarin-ecs-app-task-role",
+  "containerDefinitions": [
+    {
+      "name": "murmuration",
+      "image": "692953548549.dkr.ecr.eu-west-3.amazonaws.com/canarin-murmuration:bootstrap",
+      "essential": true,
+      "command": ["murmuration", "run", "--interval", "300"],
+      "environment": [
+        {"name": "DB_HOST", "value": "canarin-mysql-prod.chws8s8a0943.eu-west-3.rds.amazonaws.com"},
+        {"name": "DB_PORT", "value": "3306"},
+        {"name": "DB_USER", "value": "murmuration_app"},
+        {"name": "DB_SSL_CA", "value": "/etc/ssl/certs/rds-ca-bundle.pem"},
+        {"name": "REDIS_HOST", "value": "master.stc2ygvlbbpi8hg.mcyirq.euw3.cache.amazonaws.com"},
+        {"name": "REDIS_PORT", "value": "6379"},
+        {"name": "REDIS_TLS", "value": "true"},
+        {"name": "BIRDHOUSE_FANOUT_STREAM", "value": "birdhouse:fanout"},
+        {"name": "MURM_ARTIFACTS", "value": "s3://canarin-murmuration-artifacts/prod/"},
+        {"name": "MURM_STATE_PREFIX", "value": "murm:"}
+      ],
+      "secrets": [
+        {"name": "DB_PASS", "valueFrom": "arn:aws:secretsmanager:eu-west-3:692953548549:secret:canarin/db-murmuration-app-prod"},
+        {"name": "REDIS_AUTH_TOKEN", "valueFrom": "arn:aws:secretsmanager:eu-west-3:692953548549:secret:canarin/redis-auth-token-DjYjIY"}
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/canarin-murmuration",
+          "awslogs-region": "eu-west-3",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}

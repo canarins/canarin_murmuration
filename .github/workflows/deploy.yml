@@ -1,0 +1,115 @@
+name: Deploy Murmuration to ECS
+
+# CI/CD Murmuration — same self-contained, digest-pinned pattern as Birdhouse/Plumage.
+# Merge on `main` -> unit tests (no DB) -> build -> push -> register task def -> update service.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Tag d'image (défaut: rel-AAAAMMJJ-<sha>)"
+        required: false
+
+permissions:
+  id-token: write      # OIDC AssumeRole
+  contents: read
+
+env:
+  AWS_REGION: eu-west-3
+  ECR_REPO: canarin-murmuration
+  ECS_CLUSTER: canarin-cluster
+  ECS_SERVICE: canarin-murmuration
+
+jobs:
+  # Gate de tests (BLOQUANTE). Tests unitaires Python (pas de serveur/DB réels).
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install deps + pytest
+        run: |
+          pip install --quiet ".[dev]"
+      - name: pytest (unit only — integration needs MySQL + Redis)
+        run: python -m pytest tests -q -m "not integration"
+
+  build-deploy:
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Determine image tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            echo "tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=rel-$(date +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build image (depuis la racine du repo)
+        env:
+          REG: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          docker build -f Dockerfile -t "$REG/$ECR_REPO:$TAG" .
+
+      - name: Push to ECR
+        env:
+          REG: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          docker push "$REG/$ECR_REPO:$TAG"
+
+      - name: Register new task definition (image = DIGEST immuable) + deploy
+        env:
+          REG: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # On épingle la task def par DIGEST (repo@sha256:…), PAS par tag mutable :
+          # la lifecycle ECR peut purger un tag encore référencé -> 503 au prochain
+          # placement de tâche. Le digest est immuable tant qu'il est référencé.
+          # Digest lu via `docker inspect` (RepoDigests, renseigné par le push
+          # ci-dessus) -> pas besoin d'élargir l'IAM (ecr:DescribeImages).
+          IMG=$(docker inspect --format='{{index .RepoDigests 0}}' "$REG/$ECR_REPO:$TAG")
+          case "$IMG" in
+            *@sha256:*) : ;;
+            *) echo "::error::digest introuvable pour $ECR_REPO:$TAG (RepoDigests vide)"; exit 1 ;;
+          esac
+          echo "Tag poussé : $TAG  ->  image épinglée : $IMG"
+          aws ecs describe-task-definition --task-definition "$ECS_SERVICE" \
+            --region "$AWS_REGION" --query taskDefinition > td.json
+          jq --arg IMG "$IMG" '
+            del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                .compatibilities, .registeredAt, .registeredBy)
+            | .containerDefinitions[0].image = $IMG' td.json > td-new.json
+          NEWREV=$(aws ecs register-task-definition \
+            --cli-input-json file://td-new.json --region "$AWS_REGION" \
+            --query "taskDefinition.revision" --output text)
+          echo "Registered $ECS_SERVICE:$NEWREV -> $IMG"
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" \
+            --task-definition "$ECS_SERVICE:$NEWREV" \
+            --force-new-deployment --region "$AWS_REGION"
+
+      - name: Wait for service to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --region "$AWS_REGION"
+          echo "✅ $ECS_SERVICE déployé et stable."

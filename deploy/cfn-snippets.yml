@@ -1,0 +1,48 @@
+# Snippets to add to canarin_infra (nested CloudFormation stacks). Copied from
+# the Birdhouse resources; Murmuration has NO ingress at all (pure consumer).
+#
+# --- cfn/01-security-groups.yml -------------------------------------------
+  MurmurationSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${EnvironmentName}-murmuration-sg-${AWS::StackName}'
+      GroupDescription: Security group for Murmuration ECS service (world model, no ingress)
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 443,  ToPort: 443,  CidrIp: 0.0.0.0/0,   Description: HTTPS for ECR, CloudWatch, S3, Secrets}
+        - {IpProtocol: tcp, FromPort: 3306, ToPort: 3306, CidrIp: !Ref VpcCIDR, Description: MySQL to RDS}
+        - {IpProtocol: tcp, FromPort: 6379, ToPort: 6379, CidrIp: !Ref VpcCIDR, Description: Redis to ElastiCache}
+        - {IpProtocol: tcp, FromPort: 53,   ToPort: 53,   CidrIp: !Ref VpcCIDR, Description: DNS TCP}
+        - {IpProtocol: udp, FromPort: 53,   ToPort: 53,   CidrIp: !Ref VpcCIDR, Description: DNS UDP}
+      Tags: [{Key: Name, Value: !Sub '${EnvironmentName}-murmuration-sg'}]
+# add under RDSSecurityGroup.SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 3306, ToPort: 3306, SourceSecurityGroupId: !Ref MurmurationSG, Description: MySQL from Murmuration ECS}
+# add under ElastiCacheSecurityGroup.SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 6379, ToPort: 6379, SourceSecurityGroupId: !Ref MurmurationSG, Description: Redis from Murmuration ECS}
+#
+# --- cfn/04-ecr.yml (same lifecycle policy as BirdhouseRepository) ---------
+  MurmurationRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${EnvironmentName}-murmuration'
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: {ScanOnPush: true}
+      LifecyclePolicy:
+        LifecyclePolicyText: !Ref BirdhouseLifecyclePolicyText   # or copy the JSON verbatim
+#
+# --- cfn/05-ecs-cluster.yml ------------------------------------------------
+  MurmurationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${EnvironmentName}-murmuration'
+      RetentionInDays: 14
+      KmsKeyId: !GetAtt LogsKmsKey.Arn
+#
+# --- new: S3 bucket for immutable model artifacts ---------------------------
+  MurmurationArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${EnvironmentName}-murmuration-artifacts'
+      VersioningConfiguration: {Status: Enabled}
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+# and on canarin-ecs-app-task-role: s3:GetObject/PutObject/ListBucket on that bucket.
