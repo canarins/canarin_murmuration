@@ -1,0 +1,46 @@
+# Local dev stack for Murmuration.
+#   postgres  — stands in for Plumage (authoritative store); migrations auto-applied
+#   redis     — fast/slow model state AND the local stand-in for the SQS fan-out (Redis stream)
+#   localstack— optional: real SQS + S3 APIs, to exercise the AWS code paths locally
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: plumage
+      POSTGRES_PASSWORD: plumage
+      POSTGRES_DB: plumage
+    ports: ["5432:5432"]
+    volumes:
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plumage"]
+      interval: 2s
+      retries: 20
+
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+
+  localstack:
+    image: localstack/localstack:3
+    profiles: ["aws"]
+    environment:
+      SERVICES: sqs,s3
+    ports: ["4566:4566"]
+
+  murmuration:
+    build: .
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_started}
+    environment:
+      MURM_PG_DSN: postgresql://plumage:plumage@postgres:5432/plumage
+      MURM_REDIS_URL: redis://redis:6379/0
+      MURM_QUEUE: redis
+      MURM_ARTIFACTS: file:///artifacts
+    volumes:
+      - artifacts:/artifacts
+    command: ["murmuration", "run", "--interval", "300"]
+
+volumes:
+  artifacts:
